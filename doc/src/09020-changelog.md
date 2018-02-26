@@ -45,6 +45,9 @@ This section contains the changelog from the last release to the next release.
       commandline flag.
     * `imag-habit today --done` and `imag-habit status --done` was added for
       showing habits which are already done.
+    * `libimagstore` got a new iterator extension support. All iterators which
+      implement `WithStoreIterator` and are iterators over `StoreId` can now be
+      transformed into a `StoreCreateIterator` and similar iterators.
 * Minor changes
     * A license-checker was included into the CI setup, which checks whether all
       ".rs"-files have the license header at the top of the file

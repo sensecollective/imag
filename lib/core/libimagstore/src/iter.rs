@@ -222,3 +222,81 @@ mod compile_test {
     }
 }
 
+use store::Store;
+
+///
+///
+/// Iter-With-Store trait
+///
+/// With this trait, the user of the library is able to build iterators which can provide a
+/// reference to the `Store` object. With these iterators, extensions like `.into_get_iter()` can be
+/// called.
+///
+pub trait WithStoreIterator<'a> {
+    fn store(&self) -> &'a Store;
+}
+
+/// A module which provides extensions for all iterators which implement WithStoreIterator. They
+/// can be transformed into, for example, StoreCreateIterator objects.
+pub mod into {
+    use super::WithStoreIterator;
+    use iter::create::StoreCreateIterator;
+    use iter::delete::StoreDeleteIterator;
+    use iter::get::StoreGetIterator;
+    use iter::retrieve::StoreRetrieveIterator;
+    use storeid::StoreId;
+
+    pub trait IntoCreateIter<'a> {
+        fn into_create_iter(self) -> StoreCreateIterator<'a>;
+    }
+
+    impl<'a, I: 'a + 'static> IntoCreateIter<'a> for I
+        where I: WithStoreIterator<'a> + Iterator<Item = StoreId>
+    {
+        fn into_create_iter(self) -> StoreCreateIterator<'a> {
+            let store = self.store();
+            StoreCreateIterator::new(Box::new(self), store)
+        }
+    }
+
+    pub trait IntoDeleteIter<'a> {
+        fn into_delete_iter(self) -> StoreDeleteIterator<'a>;
+    }
+
+    impl<'a, I: 'static> IntoDeleteIter<'a> for I
+        where I: WithStoreIterator<'a> + Iterator<Item = StoreId>
+    {
+        fn into_delete_iter(self) -> StoreDeleteIterator<'a> {
+            let store = self.store();
+            StoreDeleteIterator::new(Box::new(self), store)
+        }
+    }
+
+    pub trait IntoGetIter<'a> {
+        fn into_get_iter(self) -> StoreGetIterator<'a>;
+    }
+
+    impl<'a, I: 'static> IntoGetIter<'a> for I
+        where I: WithStoreIterator<'a> + Iterator<Item = StoreId>
+    {
+        fn into_get_iter(self) -> StoreGetIterator<'a> {
+            let store = self.store();
+            StoreGetIterator::new(Box::new(self), store)
+        }
+    }
+
+    pub trait IntoRetrieveIter<'a> {
+        fn into_retrieve_iter(self) -> StoreRetrieveIterator<'a>;
+    }
+
+    impl<'a, I: 'static> IntoRetrieveIter<'a> for I
+        where I: WithStoreIterator<'a> + Iterator<Item = StoreId>
+    {
+        fn into_retrieve_iter(self) -> StoreRetrieveIterator<'a> {
+            let store = self.store();
+            StoreRetrieveIterator::new(Box::new(self), store)
+        }
+    }
+
+}
+
