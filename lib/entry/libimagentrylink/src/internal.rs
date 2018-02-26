@@ -630,6 +630,7 @@ pub mod store_check {
             use error::Result as LResult;
             use internal::InternalLinker;
 
+            use libimagstore::iter::into::IntoGetIter;
             use libimagstore::storeid::StoreId;
             use libimagutil::debug_result::DebugResult;
 
@@ -639,44 +640,6 @@ pub mod store_check {
                 outgoing: Vec<StoreId>,
                 incoming: Vec<StoreId>,
             }
-
-            // Helper function to aggregate the Link network
-            //
-            // This function aggregates a HashMap which maps each StoreId object in the store onto
-            // a Linking object, which contains a list of StoreIds which this entry links to and a
-            // list of StoreIds which link to the current one.
-            //
-            // The lambda returns an error if something fails
-            let aggregate_link_network = |store: &Store| -> Result<HashMap<StoreId, Linking>> {
-                store
-                    .entries()?
-                    .into_get_iter()
-                    .fold(Ok(HashMap::new()), |map, element| {
-                        map.and_then(|mut map| {
-                            debug!("Checking element = {:?}", element);
-                            let entry = element?.ok_or_else(|| {
-                                LE::from(String::from("TODO: Not yet handled"))
-                            })?;
-
-                            debug!("Checking entry = {:?}", entry.get_location());
-
-                            let internal_links = entry
-                                .get_internal_links()?
-                                .into_getter(store); // get the FLEs from the Store
-
-                            let mut linking = Linking::default();
-                            for internal_link in internal_links {
-                                debug!("internal link = {:?}", internal_link);
-
-                                linking.outgoing.push(internal_link?.get_location().clone());
-                                linking.incoming.push(entry.get_location().clone());
-                            }
-
-                            map.insert(entry.get_location().clone(), linking);
-                            Ok(map)
-                        })
-                    })
-            };
 
             // Helper to check whethre all StoreIds in the network actually exists
             //
@@ -743,7 +706,33 @@ pub mod store_check {
                     Ok(())
                 };
 
-            aggregate_link_network(&self)
+            self.entries()?
+                .into_get_iter()
+                .fold(Ok(HashMap::new()), |map, element| {
+                    map.and_then(|mut map| {
+                        debug!("Checking element = {:?}", element);
+                        let entry = element?.ok_or_else(|| {
+                            LE::from(String::from("TODO: Not yet handled"))
+                        })?;
+
+                        debug!("Checking entry = {:?}", entry.get_location());
+
+                        let internal_links = entry
+                            .get_internal_links()?
+                            .into_getter(self); // get the FLEs from the Store
+
+                        let mut linking = Linking::default();
+                        for internal_link in internal_links {
+                            debug!("internal link = {:?}", internal_link);
+
+                            linking.outgoing.push(internal_link?.get_location().clone());
+                            linking.incoming.push(entry.get_location().clone());
+                        }
+
+                        map.insert(entry.get_location().clone(), linking);
+                        Ok(map)
+                    })
+                })
                 .map_dbg_str("Aggregated")
                 .map_dbg(|nw| {
                     let mut s = String::new();
