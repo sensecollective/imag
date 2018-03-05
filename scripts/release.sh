@@ -33,6 +33,7 @@ CRATES=(
     ./lib/domain/libimagmail
     ./bin/domain/imag-habit
     ./bin/domain/imag-diary
+    ./bin/domain/imag-calendar
     ./bin/domain/imag-contact
     ./bin/domain/imag-notes
     ./bin/domain/imag-bookmark
