@@ -31,7 +31,7 @@ use error::StoreError as SE;
 use error::ResultExt;
 use store::Result;
 use store::Store;
-use iter::WithStoreIterator;
+use iter::WithStoreStoreIdIterator;
 
 /// The Index into the Store
 #[derive(Debug, Clone, Hash, Eq, PartialOrd, Ord)]
@@ -295,7 +295,7 @@ impl<'a> StoreIdIteratorWithStore<'a> {
 
 }
 
-impl<'a> WithStoreIterator<'a> for StoreIdIteratorWithStore<'a>  {
+impl<'a> WithStoreStoreIdIterator<'a> for StoreIdIteratorWithStore<'a>  {
     fn store(&self) -> &'a Store {
         &self.1
     }

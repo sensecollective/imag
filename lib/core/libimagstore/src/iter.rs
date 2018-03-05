@@ -19,18 +19,21 @@
 
 macro_rules! mk_iterator {
     {
-        modname   = $modname:ident,
-        itername  = $itername:ident,
-        iteryield = $yield:ty,
-        extname   = $extname:ident,
-        extfnname = $extfnname:ident,
-        fun       = $fun:expr
+        modname             = $modname:ident,
+        itername            = $itername:ident,
+        itername_with_store = $itername_ws:ident,
+        iteryield           = $yield:ty,
+        extname             = $extname:ident,
+        extname_with_store  = $extname_ws:ident,
+        extfnname           = $extfnname:ident,
+        fun                 = $fun:expr
     } => {
         use storeid::StoreId;
         #[allow(unused_imports)]
         use store::FileLockEntry;
         use store::Store;
         use error::Result;
+        use iter::WithStoreStoreIdIterator;
 
         pub struct $itername<'a>(Box<Iterator<Item = StoreId>>, &'a Store);
 
@@ -59,6 +62,38 @@ macro_rules! mk_iterator {
                 $itername(Box::new(self), store)
             }
         }
+
+
+        // Variant with Store reference
+
+        pub struct $itername_ws<'a>(Box<WithStoreStoreIdIterator<'a, Item = StoreId>>);
+
+        impl<'a> $itername_ws<'a> {
+            pub fn new(inner: Box<WithStoreStoreIdIterator<'a, Item = StoreId>>) -> Self {
+                $itername_ws(inner)
+            }
+        }
+
+        impl<'a> Iterator for $itername_ws<'a> {
+            type Item = Result<$yield>;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                self.0.next().map(|id| $fun(id, self.0.store()))
+            }
+        }
+
+        pub trait $extname_ws<'a> {
+            fn $extfnname(self) -> $itername_ws<'a>;
+        }
+
+        impl<'a, I> $extname<'a> for I
+            where I: WithStoreStoreIdIterator<'a, Item = StoreId>
+        {
+            fn $extfnname(self) -> $itername_ws<'a> {
+                $itername(Box::new(self))
+            }
+        }
+
     }
 }
 
@@ -71,23 +106,27 @@ pub enum ExtensionError<E> {
 
 macro_rules! mk_iterator_mod {
     {
-        modname        = $modname:ident,
-        itername       = $itername:ident,
-        iteryield      = $yield:ty,
-        extname        = $extname:ident,
-        extfnname      = $extfnname:ident,
-        fun            = $fun:expr,
-        resultitername = $resultitername:ident,
-        resultextname  = $resultextname:ident
+        modname             = $modname:ident,
+        itername            = $itername:ident,
+        itername_with_store = $itername_ws:ident,
+        iteryield           = $yield:ty,
+        extname             = $extname:ident,
+        extname_with_store  = $extname_ws:ident,
+        extfnname           = $extfnname:ident,
+        fun                 = $fun:expr,
+        resultitername      = $resultitername:ident,
+        resultextname       = $resultextname:ident
     } => {
         pub mod $modname {
             mk_iterator! {
-                modname   = $modname,
-                itername  = $itername,
-                iteryield = $yield,
-                extname   = $extname,
-                extfnname = $extfnname,
-                fun       = $fun
+                modname             = $modname,
+                itername            = $itername,
+                itername_with_store = $itername_ws,
+                iteryield           = $yield,
+                extname             = $extname,
+                extname_with_store  = $extname_ws,
+                extfnname           = $extfnname,
+                fun                 = $fun
             }
 
             use std::result::Result as RResult;
@@ -123,68 +162,80 @@ macro_rules! mk_iterator_mod {
     };
 
     {
-        modname   = $modname:ident,
-        itername  = $itername:ident,
-        iteryield = $yield:ty,
-        extname   = $extname:ident,
-        extfnname = $extfnname:ident,
-        fun       = $fun:expr
+        modname            = $modname:ident,
+        modname_with_store = $modname_ws,
+        itername           = $itername:ident,
+        iteryield          = $yield:ty,
+        extname            = $extname:ident,
+        extname_with_store = $extname_ws:ident,
+        extfnname          = $extfnname:ident,
+        fun                = $fun:expr
     } => {
         pub mod $modname {
             mk_iterator! {
-                modname   = $modname,
-                itername  = $itername,
-                iteryield = $yield,
-                extname   = $extname,
-                extfnname = $extfnname,
-                fun       = $fun
+                modname            = $modname,
+                modname_with_store = $modname_ws,
+                itername           = $itername,
+                iteryield          = $yield,
+                extname            = $extname,
+                extname_with_store = $extname_ws,
+                extfnname          = $extfnname,
+                fun                = $fun
             }
         }
     }
 }
 
 mk_iterator_mod! {
-    modname   = create,
-    itername  = StoreCreateIterator,
-    iteryield = FileLockEntry<'a>,
-    extname   = StoreIdCreateIteratorExtension,
-    extfnname = into_create_iter,
-    fun       = |id: StoreId, store: &'a Store| store.create(id),
-    resultitername = StoreCreateResultIterator,
-    resultextname  = StoreIdCreateResultIteratorExtension
+    modname             = create,
+    itername            = StoreCreateIterator,
+    itername_with_store = StoreCreateWithStoreStoreIdIterator,
+    iteryield           = FileLockEntry<'a>,
+    extname             = StoreIdCreateIteratorExtension,
+    extname_with_store  = StoreIdCreateWithStoreStoreIdIteratorExtension,
+    extfnname           = into_create_iter,
+    fun                 = |id: StoreId, store: &'a Store| store.create(id),
+    resultitername      = StoreCreateResultIterator,
+    resultextname       = StoreIdCreateResultIteratorExtension
 }
 
 mk_iterator_mod! {
-    modname   = delete,
-    itername  = StoreDeleteIterator,
-    iteryield = (),
-    extname   = StoreIdDeleteIteratorExtension,
-    extfnname = into_delete_iter,
-    fun       = |id: StoreId, store: &'a Store| store.delete(id),
-    resultitername = StoreDeleteResultIterator,
-    resultextname  = StoreIdDeleteResultIteratorExtension
+    modname             = delete,
+    itername            = StoreDeleteIterator,
+    itername_with_store = StoreDeleteWithStoreStoreIdIterator,
+    iteryield           = (),
+    extname             = StoreIdDeleteIteratorExtension,
+    extname_with_store  = StoreIdDeleteWithStoreStoreIdIteratorExtension,
+    extfnname           = into_delete_iter,
+    fun                 = |id: StoreId, store: &'a Store| store.delete(id),
+    resultitername      = StoreDeleteResultIterator,
+    resultextname       = StoreIdDeleteResultIteratorExtension
 }
 
 mk_iterator_mod! {
-    modname   = get,
-    itername  = StoreGetIterator,
-    iteryield = Option<FileLockEntry<'a>>,
-    extname   = StoreIdGetIteratorExtension,
-    extfnname = into_get_iter,
-    fun       = |id: StoreId, store: &'a Store| store.get(id),
-    resultitername = StoreGetResultIterator,
-    resultextname  = StoreIdGetResultIteratorExtension
+    modname             = get,
+    itername            = StoreGetIterator,
+    itername_with_store = StoreGetWithStoreStoreIdIterator,
+    iteryield           = Option<FileLockEntry<'a>>,
+    extname             = StoreIdGetIteratorExtension,
+    extname_with_store  = StoreIdGetWithStoreStoreIdIteratorExtension,
+    extfnname           = into_get_iter,
+    fun                 = |id: StoreId, store: &'a Store| store.get(id),
+    resultitername      = StoreGetResultIterator,
+    resultextname       = StoreIdGetResultIteratorExtension
 }
 
 mk_iterator_mod! {
-    modname   = retrieve,
-    itername  = StoreRetrieveIterator,
-    iteryield = FileLockEntry<'a>,
-    extname   = StoreIdRetrieveIteratorExtension,
-    extfnname = into_retrieve_iter,
-    fun       = |id: StoreId, store: &'a Store| store.retrieve(id),
-    resultitername = StoreRetrieveResultIterator,
-    resultextname  = StoreIdRetrieveResultIteratorExtension
+    modname             = retrieve,
+    itername            = StoreRetrieveIterator,
+    itername_with_store = StoreRetrieveWithStoreStoreIdIterator,
+    iteryield           = FileLockEntry<'a>,
+    extname             = StoreIdRetrieveIteratorExtension,
+    extname_with_store  = StoreIdRetrieveWithStoreStoreIdIteratorExtension,
+    extfnname           = into_retrieve_iter,
+    fun                 = |id: StoreId, store: &'a Store| store.retrieve(id),
+    resultitername      = StoreRetrieveResultIterator,
+    resultextname       = StoreIdRetrieveResultIteratorExtension
 }
 
 #[cfg(test)]
@@ -196,6 +247,7 @@ mod compile_test {
 
     use store::Store;
     use storeid::StoreId;
+    use iter::into::IntoGetIter;
 
     fn store() -> Store {
         unimplemented!("Not implemented because in compile-test")
@@ -232,71 +284,7 @@ use store::Store;
 /// reference to the `Store` object. With these iterators, extensions like `.into_get_iter()` can be
 /// called.
 ///
-pub trait WithStoreIterator<'a> {
+pub trait WithStoreStoreIdIterator<'a> : Iterator {
     fn store(&self) -> &'a Store;
-}
-
-/// A module which provides extensions for all iterators which implement WithStoreIterator. They
-/// can be transformed into, for example, StoreCreateIterator objects.
-pub mod into {
-    use super::WithStoreIterator;
-    use iter::create::StoreCreateIterator;
-    use iter::delete::StoreDeleteIterator;
-    use iter::get::StoreGetIterator;
-    use iter::retrieve::StoreRetrieveIterator;
-    use storeid::StoreId;
-
-    pub trait IntoCreateIter<'a> {
-        fn into_create_iter(self) -> StoreCreateIterator<'a>;
-    }
-
-    impl<'a, I: 'a + 'static> IntoCreateIter<'a> for I
-        where I: WithStoreIterator<'a> + Iterator<Item = StoreId>
-    {
-        fn into_create_iter(self) -> StoreCreateIterator<'a> {
-            let store = self.store();
-            StoreCreateIterator::new(Box::new(self), store)
-        }
-    }
-
-    pub trait IntoDeleteIter<'a> {
-        fn into_delete_iter(self) -> StoreDeleteIterator<'a>;
-    }
-
-    impl<'a, I: 'static> IntoDeleteIter<'a> for I
-        where I: WithStoreIterator<'a> + Iterator<Item = StoreId>
-    {
-        fn into_delete_iter(self) -> StoreDeleteIterator<'a> {
-            let store = self.store();
-            StoreDeleteIterator::new(Box::new(self), store)
-        }
-    }
-
-    pub trait IntoGetIter<'a> {
-        fn into_get_iter(self) -> StoreGetIterator<'a>;
-    }
-
-    impl<'a, I: 'static> IntoGetIter<'a> for I
-        where I: WithStoreIterator<'a> + Iterator<Item = StoreId>
-    {
-        fn into_get_iter(self) -> StoreGetIterator<'a> {
-            let store = self.store();
-            StoreGetIterator::new(Box::new(self), store)
-        }
-    }
-
-    pub trait IntoRetrieveIter<'a> {
-        fn into_retrieve_iter(self) -> StoreRetrieveIterator<'a>;
-    }
-
-    impl<'a, I: 'static> IntoRetrieveIter<'a> for I
-        where I: WithStoreIterator<'a> + Iterator<Item = StoreId>
-    {
-        fn into_retrieve_iter(self) -> StoreRetrieveIterator<'a> {
-            let store = self.store();
-            StoreRetrieveIterator::new(Box::new(self), store)
-        }
-    }
-
 }
 
