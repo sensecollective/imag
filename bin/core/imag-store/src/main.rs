@@ -53,7 +53,6 @@ use libimagrt::setup::generate_runtime_setup;
 
 mod create;
 mod delete;
-mod dump;
 mod error;
 mod get;
 mod retrieve;
@@ -66,7 +65,6 @@ use std::ops::Deref;
 
 use create::create;
 use delete::delete;
-use dump::dump;
 use get::get;
 use retrieve::retrieve;
 use ui::build_ui;
@@ -75,10 +73,10 @@ use verify::verify;
 
 fn main() {
     let version = make_imag_version!();
-    let mut rt = generate_runtime_setup("imag-store",
-                                        &version,
-                                        "Direct interface to the store. Use with great care!",
-                                        build_ui);
+    let rt      = generate_runtime_setup("imag-store",
+                                         &version,
+                                         "Direct interface to the store. Use with great care!",
+                                         build_ui);
 
     let command = rt.cli().subcommand_name().map(String::from);
 
@@ -91,7 +89,6 @@ fn main() {
             "retrieve" => retrieve(&rt),
             "update"   => update(&rt),
             "verify"   => verify(&rt),
-            "dump"     => dump(&mut rt),
             _ => {
                 debug!("Unknown command");
                 // More error handling
