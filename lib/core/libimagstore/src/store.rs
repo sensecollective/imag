@@ -200,6 +200,51 @@ impl Drop for StoreEntry {
 
 }
 
+/// A trait which describes the store-internal cache
+///
+/// The cache interface resembles the interface of ::std::collections::HashMap, because that's what
+/// the cache was before this trait existed.
+trait Cache : Debug {
+    fn is_empty(&self) -> bool;
+    fn contains_key(&self, sid: &StoreId) -> bool;
+    fn get_mut(&mut self, sid: &StoreId) -> Option<&mut StoreEntry>;
+    fn get(&self, sid: &StoreId) -> Option<&StoreEntry>;
+    fn insert(&mut self, sid: StoreId, entry: StoreEntry) -> Option<StoreEntry>;
+    fn remove(&mut self, sid: &StoreId) -> Option<StoreEntry>;
+}
+
+/// A cache implementation which is used when using the store "normally", that is when accessing the
+/// Filesystem with the Store.
+///
+/// Therefore, the name of this implementation is "FSCache".
+#[derive(Debug)]
+struct FSCache(HashMap<StoreId, StoreEntry>);
+
+impl Cache for FSCache {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn contains_key(&self, sid: &StoreId) -> bool {
+        self.0.contains_key(sid)
+    }
+
+    fn get_mut(&mut self, sid: &StoreId) -> Option<&mut StoreEntry> {
+        self.0.get_mut(sid)
+    }
+
+    fn get(&self, sid: &StoreId) -> Option<&StoreEntry> {
+        self.0.get(sid)
+    }
+
+    fn insert(&mut self, sid: StoreId, entry: StoreEntry) -> Option<StoreEntry> {
+        self.0.insert(sid, entry)
+    }
+
+    fn remove(&mut self, sid: &StoreId) -> Option<StoreEntry> {
+        self.0.remove(sid)
+    }
+}
 
 /// The Store itself, through this object one can interact with IMAG's entries
 pub struct Store {
@@ -212,7 +257,7 @@ pub struct Store {
     ///
     /// Could be optimized for a threadsafe HashMap
     ///
-    entries: Arc<RwLock<HashMap<StoreId, StoreEntry>>>,
+    entries: Arc<RwLock<Box<Cache>>>,
 
     /// The backend to use
     ///
@@ -270,7 +315,7 @@ impl Store {
 
         let store = Store {
             location: location.clone(),
-            entries: Arc::new(RwLock::new(HashMap::new())),
+            entries: Arc::new(RwLock::new(Box::new(FSCache(HashMap::new())))),
             backend: backend,
         };
 
@@ -384,8 +429,11 @@ impl Store {
             .write()
             .map_err(|_| SE::from_kind(SEK::LockPoisoned))
             .and_then(|mut es| {
-                let new_se = StoreEntry::new(id.clone(), &self.backend)?;
-                let se = es.entry(id.clone()).or_insert(new_se);
+                if !es.contains_key(&id) {
+                    let new_se = StoreEntry::new(id.clone(), &self.backend)?;
+                    let _      = es.insert(id.clone(), new_se);
+                }
+                let se = es.get_mut(&id).unwrap(); //secured through line above
                 let entry = se.get_entry();
                 se.status = StoreEntryStatus::Borrowed;
                 entry
