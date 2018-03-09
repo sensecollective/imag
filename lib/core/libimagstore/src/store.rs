@@ -651,50 +651,6 @@ impl Store {
         Ok(())
     }
 
-    /// Save a copy of the Entry in another place
-    pub fn save_to(&self, entry: &FileLockEntry, new_id: StoreId) -> Result<()> {
-        debug!("Saving '{}' to '{}'", entry.get_location(), new_id);
-        self.save_to_other_location(entry, new_id, false)
-    }
-
-    /// Save an Entry in another place
-    /// Removes the original entry
-    pub fn save_as(&self, entry: FileLockEntry, new_id: StoreId) -> Result<()> {
-        debug!("Saving '{}' as '{}'", entry.get_location(), new_id);
-        self.save_to_other_location(&entry, new_id, true)
-    }
-
-    fn save_to_other_location(&self, entry: &FileLockEntry, new_id: StoreId, remove_old: bool)
-        -> Result<()>
-    {
-        let new_id = new_id.with_base(self.path().clone());
-        let hsmap = self
-            .entries
-            .write()
-            .map_err(|_| SE::from_kind(SEK::LockPoisoned))
-            .chain_err(|| SEK::MoveCallError)?;
-
-        if hsmap.contains_key(&new_id) {
-            return Err(SE::from_kind(SEK::EntryAlreadyExists(new_id.clone())))
-                .chain_err(|| SEK::MoveCallError)
-        }
-
-        let old_id = entry.get_location().clone();
-
-        let old_id_as_path = old_id.clone().with_base(self.path().clone()).into_pathbuf()?;
-        let new_id_as_path = new_id.clone().with_base(self.path().clone()).into_pathbuf()?;
-        self.backend
-            .copy(&old_id_as_path, &new_id_as_path)
-            .and_then(|_| if remove_old {
-                debug!("Removing old '{:?}'", old_id_as_path);
-                self.backend.remove_file(&old_id_as_path)
-            } else {
-                Ok(())
-            })
-            .chain_err(|| SEK::FileError)
-            .chain_err(|| SEK::MoveCallError)
-    }
-
     /// Move an entry without loading
     ///
     /// This function moves an entry from one path to another.
