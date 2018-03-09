@@ -205,12 +205,17 @@ impl Drop for StoreEntry {
 /// The cache interface resembles the interface of ::std::collections::HashMap, because that's what
 /// the cache was before this trait existed.
 trait Cache : Debug {
+    fn backend(&self) -> &Box<FileAbstraction>;
     fn is_empty(&self) -> bool;
     fn contains_key(&self, sid: &StoreId) -> bool;
     fn get_mut(&mut self, sid: &StoreId) -> Option<&mut StoreEntry>;
     fn get(&self, sid: &StoreId) -> Option<&StoreEntry>;
-    fn insert(&mut self, sid: StoreId, entry: StoreEntry) -> Option<StoreEntry>;
-    fn remove(&mut self, sid: &StoreId) -> Option<StoreEntry>;
+    fn insert(&mut self, sid: StoreId, entry: StoreEntry);
+    fn remove(&mut self, id: &StoreId) -> Result<()>;
+    fn get_copy(&self, sid: StoreId) -> Result<Entry>;
+    fn exists(&self, sid: &StoreId, base: &PathBuf) -> Result<bool>;
+    fn move_by_id(&mut self, old: &StoreId, new: &StoreId, base: &PathBuf) -> Result<()>;
+    fn entries(&self, base: &PathBuf) -> Result<StoreIdIterator>;
 }
 
 /// A cache implementation which is used when using the store "normally", that is when accessing the
@@ -218,31 +223,153 @@ trait Cache : Debug {
 ///
 /// Therefore, the name of this implementation is "FSCache".
 #[derive(Debug)]
-struct FSCache(HashMap<StoreId, StoreEntry>);
+struct FSCache {
+    cache: HashMap<StoreId, StoreEntry>,
+    backend: Box<FileAbstraction>,
+}
+
+impl FSCache {
+    pub fn new(backend: Box<FileAbstraction>) -> FSCache {
+        FSCache {
+            cache: HashMap::new(),
+            backend
+        }
+    }
+}
 
 impl Cache for FSCache {
+    fn backend(&self) -> &Box<FileAbstraction> {
+        &self.backend
+    }
+
     fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.cache.is_empty()
     }
 
     fn contains_key(&self, sid: &StoreId) -> bool {
-        self.0.contains_key(sid)
+        self.cache.contains_key(sid)
     }
 
     fn get_mut(&mut self, sid: &StoreId) -> Option<&mut StoreEntry> {
-        self.0.get_mut(sid)
+        self.cache.get_mut(sid)
     }
 
     fn get(&self, sid: &StoreId) -> Option<&StoreEntry> {
-        self.0.get(sid)
+        self.cache.get(sid)
     }
 
-    fn insert(&mut self, sid: StoreId, entry: StoreEntry) -> Option<StoreEntry> {
-        self.0.insert(sid, entry)
+    fn insert(&mut self, sid: StoreId, entry: StoreEntry) {
+        self.cache.insert(sid, entry);
     }
 
-    fn remove(&mut self, sid: &StoreId) -> Option<StoreEntry> {
-        self.0.remove(sid)
+    fn remove(&mut self, id: &StoreId) -> Result<()> {
+        // if the entry is currently modified by the user, we cannot drop it
+        match self.cache.get(&id) {
+            None => {
+                // The entry is not in the internal cache. But maybe on the filesystem?
+                debug!("Seems like {:?} is not in the internal cache", id);
+
+                // Small optimization: We need the pathbuf for deleting, but when calling
+                // StoreId::exists(), a PathBuf object gets allocated. So we simply get a
+                // PathBuf here, check whether it is there and if it is, we can re-use it to
+                // delete the filesystem file.
+                let pb = id.clone().into_pathbuf()?;
+
+                if pb.exists() {
+                    // looks like we're deleting a not-loaded file from the store.
+                    debug!("Seems like {:?} is on the FS", pb);
+                    return self.backend.remove_file(&pb)
+                } else {
+                    debug!("Seems like {:?} is not even on the FS", pb);
+                    return Err(SE::from_kind(SEK::FileNotFound))
+                        .chain_err(|| SEK::DeleteCallError)
+                }
+            },
+            Some(e) => if e.is_borrowed() {
+                return Err(SE::from_kind(SEK::IdLocked)).chain_err(|| SEK::DeleteCallError)
+            }
+        }
+
+        // Entry was removed from the backend if we hit this line
+        let _ = self.cache.remove(id);
+        Ok(())
+    }
+
+    fn get_copy(&self, id: StoreId) -> Result<Entry> {
+        // if the entry is currently modified by the user, we cannot drop it
+        if self.cache.get(&id).map(|e| e.is_borrowed()).unwrap_or(false) {
+            return Err(SE::from_kind(SEK::IdLocked)).chain_err(|| SEK::RetrieveCopyCallError);
+        }
+
+        StoreEntry::new(id, &self.backend)?.get_entry()
+    }
+
+    fn exists(&self, sid: &StoreId, base: &PathBuf) -> Result<bool> {
+        Ok(self.contains_key(sid) || {
+            let pb = sid.clone().with_base(base.clone()).into_pathbuf()?;
+            self.backend.exists(&pb)?
+        })
+    }
+
+    fn move_by_id(&mut self, old_id: &StoreId, new_id: &StoreId, base: &PathBuf) -> Result<()> {
+        if self.cache.contains_key(&new_id) {
+            return Err(SE::from_kind(SEK::EntryAlreadyExists(new_id.clone())));
+        }
+        debug!("New id does not exist in cache");
+
+        // if we do not have an entry here, we fail in `FileAbstraction::rename()` below.
+        // if we have one, but it is borrowed, we really should not rename it, as this might
+        // lead to strange errors
+        if self.cache.get(&old_id).map(|e| e.is_borrowed()).unwrap_or(false) {
+            return Err(SE::from_kind(SEK::EntryAlreadyBorrowed(old_id.clone())));
+        }
+
+        debug!("Old id is not yet borrowed");
+
+        let old_id_pb = old_id.clone().with_base(base.clone()).into_pathbuf()?;
+        let new_id_pb = new_id.clone().with_base(base.clone()).into_pathbuf()?;
+
+        if self.cache.contains_key(&new_id) || self.backend.exists(&new_id_pb)? {
+            return Err(SE::from_kind(SEK::EntryAlreadyExists(new_id.clone())));
+        }
+        debug!("New entry does not yet exist on filesystem. Good.");
+
+        let _ = self
+            .backend
+            .rename(&old_id_pb, &new_id_pb)
+            .chain_err(|| SEK::EntryRenameError(old_id_pb, new_id_pb))?;
+
+        debug!("Rename worked on filesystem");
+
+        let _ = self.cache
+            .remove(&old_id)
+            .map(|mut entry| {
+                entry.id = new_id.clone();
+                self.insert(new_id.clone(), entry);
+            });
+
+        Ok(())
+    }
+
+    fn entries(&self, base: &PathBuf) -> Result<StoreIdIterator> {
+        self.backend
+            .pathes_recursively(base.clone())
+            .and_then(|iter| {
+                let mut elems = vec![];
+                for element in iter {
+                    let is_file = {
+                        let mut base = base.clone();
+                        base.push(element.clone());
+                        self.backend.is_file(&base)?
+                    };
+
+                    if is_file {
+                        let sid = StoreId::from_full_path(base, element)?;
+                        elems.push(sid);
+                    }
+                }
+                Ok(StoreIdIterator::new(Box::new(elems.into_iter())))
+            })
     }
 }
 
@@ -258,11 +385,6 @@ pub struct Store {
     /// Could be optimized for a threadsafe HashMap
     ///
     entries: Arc<RwLock<Box<Cache>>>,
-
-    /// The backend to use
-    ///
-    /// This provides the filesystem-operation functions (or pretends to)
-    backend: Box<FileAbstraction>,
 }
 
 impl Store {
@@ -315,8 +437,7 @@ impl Store {
 
         let store = Store {
             location: location.clone(),
-            entries: Arc::new(RwLock::new(Box::new(FSCache(HashMap::new())))),
-            backend: backend,
+            entries: Arc::new(RwLock::new(Box::new(FSCache::new(backend)))),
         };
 
         debug!("Store building succeeded");
@@ -325,33 +446,6 @@ impl Store {
         debug!("------------------------");
 
         Ok(store)
-    }
-
-    /// Reset the backend of the store during runtime
-    ///
-    /// # Warning
-    ///
-    /// This is dangerous!
-    /// You should not be able to do that in application code, only the libimagrt should be used to
-    /// do this via safe and careful wrapper functions!
-    ///
-    /// If you are able to do this without using `libimagrt`, please file an issue report.
-    ///
-    /// # Purpose
-    ///
-    /// With the I/O backend of the store, the store is able to pipe itself out via (for example)
-    /// JSON. But because we need a functionality where we load contents from the filesystem and
-    /// then pipe it to stdout, we need to be able to replace the backend during runtime.
-    ///
-    /// This also applies the other way round: If we get the store from stdin and have to persist it
-    /// to stdout, we need to be able to replace the in-memory backend with the real filesystem
-    /// backend.
-    ///
-    pub fn reset_backend(&mut self, mut backend: Box<FileAbstraction>) -> Result<()> {
-        self.backend
-            .drain()
-            .and_then(|drain| backend.fill(drain))
-            .map(|_| self.backend = backend)
     }
 
     /// Creates the Entry at the given location (inside the entry)
@@ -394,12 +488,13 @@ impl Store {
                 return Err(SE::from_kind(SEK::EntryAlreadyExists(id.clone())))
                            .chain_err(|| SEK::CreateCallError);
             }
-            hsmap.insert(id.clone(), {
-                debug!("Creating: '{}'", id);
-                let mut se = StoreEntry::new(id.clone(), &self.backend)?;
-                se.status = StoreEntryStatus::Borrowed;
-                se
-            });
+
+            debug!("Creating: '{}'", id);
+            let mut se = StoreEntry::new(id.clone(), &hsmap.backend())?;
+            se.status  = StoreEntryStatus::Borrowed;
+            let _      = hsmap.insert(id.clone(), se);
+
+            //hsmap.mark_as_borrowed(&id);
         }
 
         debug!("Constructing FileLockEntry: '{}'", id);
@@ -430,17 +525,27 @@ impl Store {
             .map_err(|_| SE::from_kind(SEK::LockPoisoned))
             .and_then(|mut es| {
                 if !es.contains_key(&id) {
-                    let new_se = StoreEntry::new(id.clone(), &self.backend)?;
-                    let _      = es.insert(id.clone(), new_se);
+                    debug!("Creating: '{}'", id);
+                    let mut se = StoreEntry::new(id.clone(), &es.backend())?;
+                    let entry  = se.get_entry()?;
+
+                    trace!("Setting {:?} to be borrowed", id);
+                    se.status  = StoreEntryStatus::Borrowed;
+
+                    let _      = es.insert(id, se);
+                    Ok(entry)
+                } else {
+                    let se    = es.get_mut(&id).unwrap();
+                    let entry = se.get_entry()?;
+
+                    trace!("Setting {:?} to be borrowed", id);
+                    se.status = StoreEntryStatus::Borrowed;
+
+                    Ok(entry)
                 }
-                let se = es.get_mut(&id).unwrap(); //secured through line above
-                let entry = se.get_entry();
-                se.status = StoreEntryStatus::Borrowed;
-                entry
             })
             .chain_err(|| SEK::RetrieveCallError)?;
 
-        debug!("Constructing FileLockEntry: '{}'", id);
         Ok(FileLockEntry::new(self, entry))
     }
 
@@ -578,13 +683,7 @@ impl Store {
         let entries = self.entries.write()
             .map_err(|_| SE::from_kind(SEK::LockPoisoned))
             .chain_err(|| SEK::RetrieveCopyCallError)?;
-
-        // if the entry is currently modified by the user, we cannot drop it
-        if entries.get(&id).map(|e| e.is_borrowed()).unwrap_or(false) {
-            return Err(SE::from_kind(SEK::IdLocked)).chain_err(|| SEK::RetrieveCopyCallError);
-        }
-
-        StoreEntry::new(id, &self.backend)?.get_entry()
+        entries.get_copy(id)
     }
 
     /// Delete an entry
@@ -610,39 +709,8 @@ impl Store {
                 .map_err(|_| SE::from_kind(SEK::LockPoisoned))
                 .chain_err(|| SEK::DeleteCallError)?;
 
-            // if the entry is currently modified by the user, we cannot drop it
-            match entries.get(&id) {
-                None => {
-                    // The entry is not in the internal cache. But maybe on the filesystem?
-                    debug!("Seems like {:?} is not in the internal cache", id);
-
-                    // Small optimization: We need the pathbuf for deleting, but when calling
-                    // StoreId::exists(), a PathBuf object gets allocated. So we simply get a
-                    // PathBuf here, check whether it is there and if it is, we can re-use it to
-                    // delete the filesystem file.
-                    let pb = id.into_pathbuf()?;
-
-                    if pb.exists() {
-                        // looks like we're deleting a not-loaded file from the store.
-                        debug!("Seems like {:?} is on the FS", pb);
-                        return self.backend.remove_file(&pb)
-                    } else {
-                        debug!("Seems like {:?} is not even on the FS", pb);
-                        return Err(SE::from_kind(SEK::FileNotFound))
-                            .chain_err(|| SEK::DeleteCallError)
-                    }
-                },
-                Some(e) => if e.is_borrowed() {
-                    return Err(SE::from_kind(SEK::IdLocked)).chain_err(|| SEK::DeleteCallError)
-                }
-            }
-
-            // remove the entry first, then the file
-            entries.remove(&id);
-            let pb = id.clone().with_base(self.path().clone()).into_pathbuf()?;
-            let _ = self
-                .backend
-                .remove_file(&pb)
+            entries
+                .remove(&id)
                 .chain_err(|| SEK::FileError)
                 .chain_err(|| SEK::DeleteCallError)?;
         }
@@ -692,44 +760,7 @@ impl Store {
 
         {
             let mut hsmap = self.entries.write().map_err(|_| SE::from_kind(SEK::LockPoisoned))?;
-
-            if hsmap.contains_key(&new_id) {
-                return Err(SE::from_kind(SEK::EntryAlreadyExists(new_id.clone())));
-            }
-            debug!("New id does not exist in cache");
-
-            // if we do not have an entry here, we fail in `FileAbstraction::rename()` below.
-            // if we have one, but it is borrowed, we really should not rename it, as this might
-            // lead to strange errors
-            if hsmap.get(&old_id).map(|e| e.is_borrowed()).unwrap_or(false) {
-                return Err(SE::from_kind(SEK::EntryAlreadyBorrowed(old_id.clone())));
-            }
-
-            debug!("Old id is not yet borrowed");
-
-            let old_id_pb = old_id.clone().with_base(self.path().clone()).into_pathbuf()?;
-            let new_id_pb = new_id.clone().with_base(self.path().clone()).into_pathbuf()?;
-
-            if self.backend.exists(&new_id_pb)? {
-                return Err(SE::from_kind(SEK::EntryAlreadyExists(new_id.clone())));
-            }
-            debug!("New entry does not yet exist on filesystem. Good.");
-
-            let _ = self
-                .backend
-                .rename(&old_id_pb, &new_id_pb)
-                .chain_err(|| SEK::EntryRenameError(old_id_pb, new_id_pb))?;
-
-            debug!("Rename worked on filesystem");
-
-            // assert enforced through check hsmap.contains_key(&new_id) above.
-            // Should therefor never fail
-            assert!(hsmap
-                    .remove(&old_id)
-                    .and_then(|mut entry| {
-                        entry.id = new_id.clone();
-                        hsmap.insert(new_id.clone(), entry)
-                    }).is_none())
+            let _ = hsmap.move_by_id(&old_id, &new_id, self.path())?;
         }
 
         debug!("Moved");
@@ -738,24 +769,11 @@ impl Store {
 
     /// Get _all_ entries in the store (by id as iterator)
     pub fn entries<'a>(&'a self) -> Result<StoreIdIteratorWithStore<'a>> {
-        self.backend
-            .pathes_recursively(self.path().clone())
-            .and_then(|iter| {
-                let mut elems = vec![];
-                for element in iter {
-                    let is_file = {
-                        let mut base = self.path().clone();
-                        base.push(element.clone());
-                        self.backend.is_file(&base)?
-                    };
-
-                    if is_file {
-                        let sid = StoreId::from_full_path(self.path(), element)?;
-                        elems.push(sid);
-                    }
-                }
-                Ok(StoreIdIteratorWithStore::new(Box::new(elems.into_iter()), self))
-            })
+        self.entries
+            .write()
+            .map_err(|_| SE::from_kind(SEK::LockPoisoned))?
+            .entries(self.path())
+            .map(|iter| iter.with_store(self))
     }
 
     /// Gets the path where this store is on the disk
