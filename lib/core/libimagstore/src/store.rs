@@ -1532,50 +1532,5 @@ mod store_tests {
         }
     }
 
-    #[test]
-    fn test_swap_backend_during_runtime() {
-        use file_abstraction::InMemoryFileAbstraction;
-
-        let mut store = {
-            let backend = InMemoryFileAbstraction::new();
-            let backend = Box::new(backend);
-
-            Store::new_with_backend(PathBuf::from("/"), &None, backend).unwrap()
-        };
-
-        for n in 1..100 {
-            let s = format!("test-{}", n);
-            let entry = store.create(PathBuf::from(s.clone())).unwrap();
-            assert!(entry.verify().is_ok());
-            let loc = entry.get_location().clone().into_pathbuf().unwrap();
-            assert!(loc.starts_with("/"));
-            assert!(loc.ends_with(s));
-        }
-
-        {
-            let other_backend = InMemoryFileAbstraction::new();
-            let other_backend = Box::new(other_backend);
-
-            assert!(store.reset_backend(other_backend).is_ok())
-        }
-
-        for n in 1..100 {
-            let s = format!("test-{}", n);
-            let entry = store.get(PathBuf::from(s.clone()));
-
-            assert!(entry.is_ok());
-            let entry = entry.unwrap();
-
-            assert!(entry.is_some());
-            let entry = entry.unwrap();
-
-            assert!(entry.verify().is_ok());
-
-            let loc = entry.get_location().clone().into_pathbuf().unwrap();
-            assert!(loc.starts_with("/"));
-            assert!(loc.ends_with(s));
-        }
-    }
-
 }
 
