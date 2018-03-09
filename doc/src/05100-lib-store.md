@@ -57,6 +57,24 @@ Between these layers we need
 +-------------+-------------+---------------------------+
 ```
 
+So, the `Parser` is nothing more than free functions `IO -> Entry` and `Entry ->
+IO` which could be bundled.
+
+The `Cache` could be a trait which provides a CRUD interface.
+Two implementations: `FSCache` or `IOCache`.
+When instantiating the `Store`, the `Cache` can be provided (optionally).
+When passing the `IOCache`, the object already contains the parsed `stdin`
+input.
+When `Drop`ping the `IOCache`, it writes out all entries to `stdout` (after
+serializing).
+
+There has to be a way to convert one `Cache` into another. So that we can use
+`IOCache` to read the store from stdin and then use the `FSCache` to write the
+store, as well as the other way round.
+
+The `FSCache` holds a `Backend`, which is either a `FileSystemBackend` or a
+`InMemoryBackend`.
+
 ### Long-term TODO
 
 - [ ] Merge with `libimagrt`
