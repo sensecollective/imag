@@ -51,6 +51,7 @@ pub mod key_value_split;
 pub mod variants;
 pub mod warn_exit;
 pub mod warn_result;
+#[macro_use] pub mod extend;
 
 #[cfg(feature = "testing")]
 pub mod testing;
