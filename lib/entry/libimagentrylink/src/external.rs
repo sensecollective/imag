@@ -57,54 +57,32 @@ use url::Url;
 use crypto::sha1::Sha1;
 use crypto::digest::Digest;
 
-pub trait Link {
+extend! {
+    trait Link extending Entry {
 
-    fn get_link_uri_from_filelockentry(&self) -> Result<Option<Url>>;
-
-    fn get_url(&self) -> Result<Option<Url>>;
-
-}
-
-impl Link for Entry {
-
-    fn get_link_uri_from_filelockentry(&self) -> Result<Option<Url>> {
-        self.get_header()
-            .read_string("links.external.content.url")
-            .chain_err(|| LEK::EntryHeaderReadError)
-            .and_then(|opt| match opt {
-                None        => Ok(None),
-                Some(ref s) => {
-                    debug!("Found url, parsing: {:?}", s);
-                    Url::parse(&s[..]).chain_err(|| LEK::InvalidUri).map(Some)
-                },
-            })
-    }
-
-    fn get_url(&self) -> Result<Option<Url>> {
-        match self.get_header().read_string("links.external.url")? {
-            None        => Ok(None),
-            Some(ref s) => Url::parse(&s[..])
-                .map(Some)
-                .chain_err(|| LEK::EntryHeaderReadError),
+        fn get_link_uri_from_filelockentry(&self) -> Result<Option<Url>> {
+            self.get_header()
+                .read_string("links.external.content.url")
+                .chain_err(|| LEK::EntryHeaderReadError)
+                .and_then(|opt| match opt {
+                    None        => Ok(None),
+                    Some(ref s) => {
+                        debug!("Found url, parsing: {:?}", s);
+                        Url::parse(&s[..]).chain_err(|| LEK::InvalidUri).map(Some)
+                    },
+                })
         }
+
+        fn get_url(&self) -> Result<Option<Url>> {
+            match self.get_header().read_string("links.external.url")? {
+                None        => Ok(None),
+                Some(ref s) => Url::parse(&s[..])
+                    .map(Some)
+                    .chain_err(|| LEK::EntryHeaderReadError),
+            }
+        }
+
     }
-
-}
-
-pub trait ExternalLinker : InternalLinker {
-
-    /// Get the external links from the implementor object
-    fn get_external_links<'a>(&self, store: &'a Store) -> Result<UrlIter<'a>>;
-
-    /// Set the external links for the implementor object
-    fn set_external_links(&mut self, store: &Store, links: Vec<Url>) -> Result<()>;
-
-    /// Add an external link to the implementor object
-    fn add_external_link(&mut self, store: &Store, link: Url) -> Result<()>;
-
-    /// Remove an external link from the implementor object
-    fn remove_external_link(&mut self, store: &Store, link: Url) -> Result<()>;
-
 }
 
 pub mod iter {
@@ -164,19 +142,17 @@ pub mod iter {
         }
     }
 
-    /// Helper trait to be implemented on `LinkIter` to select or deselect all external links
-    ///
-    /// # See also
-    ///
-    /// Also see `OnlyExternalIter` and `NoExternalIter` and the helper traits/functions
-    /// `OnlyInteralLinks`/`only_internal_links()` and `OnlyExternalLinks`/`only_external_links()`.
-    pub trait SelectExternal {
-        fn select_external_links(self, b: bool) -> ExternalFilterIter;
-    }
-
-    impl SelectExternal for LinkIter {
-        fn select_external_links(self, b: bool) -> ExternalFilterIter {
-            ExternalFilterIter(self, b)
+    extend! {
+        /// Helper trait to be implemented on `LinkIter` to select or deselect all external links
+        ///
+        /// # See also
+        ///
+        /// Also see `OnlyExternalIter` and `NoExternalIter` and the helper traits/functions
+        /// `OnlyInteralLinks`/`only_internal_links()` and `OnlyExternalLinks`/`only_external_links()`.
+        trait SelectExternal extending LinkIter {
+            fn select_external_links(self, b: bool) -> ExternalFilterIter {
+                ExternalFilterIter(self, b)
+            }
         }
     }
 
@@ -217,31 +193,26 @@ pub mod iter {
         }
     }
 
-    pub trait OnlyExternalLinks : Sized {
-        fn only_external_links(self) -> OnlyExternalIter ;
-
-        fn no_internal_links(self) -> OnlyExternalIter {
-            self.only_external_links()
+    extend! {
+        trait OnlyExternalLinks extending LinkIter {
+            fn only_external_links(self) -> OnlyExternalIter {
+                OnlyExternalIter::new(self)
+            }
+            fn no_internal_links(self) -> OnlyExternalIter {
+                self.only_external_links()
+            }
         }
     }
 
-    impl OnlyExternalLinks for LinkIter {
-        fn only_external_links(self) -> OnlyExternalIter {
-            OnlyExternalIter::new(self)
-        }
-    }
+    extend! {
+        trait OnlyInternalLinks extending LinkIter {
+            fn only_internal_links(self) -> NoExternalIter {
+                NoExternalIter::new(self)
+            }
 
-    pub trait OnlyInternalLinks : Sized {
-        fn only_internal_links(self) -> NoExternalIter;
-
-        fn no_external_links(self) -> NoExternalIter {
-            self.only_internal_links()
-        }
-    }
-
-    impl OnlyInternalLinks for LinkIter {
-        fn only_internal_links(self) -> NoExternalIter {
-            NoExternalIter::new(self)
+            fn no_external_links(self) -> NoExternalIter {
+                self.only_internal_links()
+            }
         }
     }
 
@@ -291,115 +262,117 @@ pub fn is_external_link_storeid<A: AsRef<StoreId> + Debug>(id: A) -> bool {
     id.as_ref().local().starts_with("links/external")
 }
 
-/// Implement `ExternalLinker` for `Entry`, hiding the fact that there is no such thing as an external
-/// link in an entry, but internal links to other entries which serve as external links, as one
-/// entry in the store can only have one external link.
-impl ExternalLinker for Entry {
+extend! {
+    /// Implement `ExternalLinker` for `Entry`, hiding the fact that there is no such thing as an external
+    /// link in an entry, but internal links to other entries which serve as external links, as one
+    /// entry in the store can only have one external link.
+    trait ExternalLinker extending Entry {
 
-    /// Get the external links from the implementor object
-    fn get_external_links<'a>(&self, store: &'a Store) -> Result<UrlIter<'a>> {
-        // Iterate through all internal links and filter for FileLockEntries which live in
-        // /link/external/<SHA> -> load these files and get the external link from their headers,
-        // put them into the return vector.
-        self.get_internal_links()
-            .map(|iter| {
-                debug!("Getting external links");
-                iter.only_external_links().urls(store)
-            })
-    }
-
-    /// Set the external links for the implementor object
-    fn set_external_links(&mut self, store: &Store, links: Vec<Url>) -> Result<()> {
-        // Take all the links, generate a SHA sum out of each one, filter out the already existing
-        // store entries and store the other URIs in the header of one FileLockEntry each, in
-        // the path /link/external/<SHA of the URL>
-
-        debug!("Iterating {} links = {:?}", links.len(), links);
-        for link in links { // for all links
-            let hash = {
-                let mut s = Sha1::new();
-                s.input_str(&link.as_str()[..]);
-                s.result_str()
-            };
-            let file_id =
-                ModuleEntryPath::new(format!("external/{}", hash)).into_storeid()
-                    .map_dbg_err(|_| {
-                        format!("Failed to build StoreId for this hash '{:?}'", hash)
-                    })
-                ?;
-
-            debug!("Link    = '{:?}'", link);
-            debug!("Hash    = '{:?}'", hash);
-            debug!("StoreId = '{:?}'", file_id);
-
-            // retrieve the file from the store, which implicitely creates the entry if it does not
-            // exist
-            let mut file = store
-                .retrieve(file_id.clone())
-                .map_dbg_err(|_| {
-                    format!("Failed to create or retrieve an file for this link '{:?}'", link)
-                })?;
-
-            debug!("Generating header content!");
-            {
-                let hdr = file.deref_mut().get_header_mut();
-
-                let mut table = match hdr.read("links.external.content")? {
-                    Some(&Value::Table(ref table)) => table.clone(),
-                    Some(_) => {
-                        warn!("There is a value at 'links.external.content' which is not a table.");
-                        warn!("Going to override this value");
-                        BTreeMap::new()
-                    },
-                    None => BTreeMap::new(),
-                };
-
-                let v = Value::String(link.into_string());
-
-                debug!("setting URL = '{:?}", v);
-                table.insert(String::from("url"), v);
-
-                let _ = hdr.insert("links.external.content", Value::Table(table))?;
-                debug!("Setting URL worked");
-            }
-
-            // then add an internal link to the new file or return an error if this fails
-            let _ = self.add_internal_link(file.deref_mut())?;
-            debug!("Error adding internal link");
+        /// Get the external links from the implementor object
+        fn get_external_links<'a>(&self, store: &'a Store) -> Result<UrlIter<'a>> {
+            // Iterate through all internal links and filter for FileLockEntries which live in
+            // /link/external/<SHA> -> load these files and get the external link from their headers,
+            // put them into the return vector.
+            self.get_internal_links()
+                .map(|iter| {
+                    debug!("Getting external links");
+                    iter.only_external_links().urls(store)
+                })
         }
-        debug!("Ready iterating");
-        Ok(())
-    }
 
-    /// Add an external link to the implementor object
-    fn add_external_link(&mut self, store: &Store, link: Url) -> Result<()> {
-        // get external links, add this one, save them
-        debug!("Getting links");
-        self.get_external_links(store)
-            .and_then(|links| {
-                // TODO: Do not ignore errors here
-                let mut links = links.filter_map(Result::ok).collect::<Vec<_>>();
-                debug!("Adding link = '{:?}' to links = {:?}", link, links);
-                links.push(link);
-                debug!("Setting {} links = {:?}", links.len(), links);
-                self.set_external_links(store, links)
-            })
-    }
+        /// Set the external links for the implementor object
+        fn set_external_links(&mut self, store: &Store, links: Vec<Url>) -> Result<()> {
+            // Take all the links, generate a SHA sum out of each one, filter out the already existing
+            // store entries and store the other URIs in the header of one FileLockEntry each, in
+            // the path /link/external/<SHA of the URL>
 
-    /// Remove an external link from the implementor object
-    fn remove_external_link(&mut self, store: &Store, link: Url) -> Result<()> {
-        // get external links, remove this one, save them
-        self.get_external_links(store)
-            .and_then(|links| {
-                debug!("Removing link = '{:?}'", link);
-                let links = links
-                    .filter_map(Result::ok)
-                    .filter(|l| l.as_str() != link.as_str())
-                    .collect::<Vec<_>>();
-                self.set_external_links(store, links)
-            })
-    }
+            debug!("Iterating {} links = {:?}", links.len(), links);
+            for link in links { // for all links
+                let hash = {
+                    let mut s = Sha1::new();
+                    s.input_str(&link.as_str()[..]);
+                    s.result_str()
+                };
+                let file_id =
+                    ModuleEntryPath::new(format!("external/{}", hash)).into_storeid()
+                        .map_dbg_err(|_| {
+                            format!("Failed to build StoreId for this hash '{:?}'", hash)
+                        })
+                    ?;
 
+                debug!("Link    = '{:?}'", link);
+                debug!("Hash    = '{:?}'", hash);
+                debug!("StoreId = '{:?}'", file_id);
+
+                // retrieve the file from the store, which implicitely creates the entry if it does not
+                // exist
+                let mut file = store
+                    .retrieve(file_id.clone())
+                    .map_dbg_err(|_| {
+                        format!("Failed to create or retrieve an file for this link '{:?}'", link)
+                    })?;
+
+                debug!("Generating header content!");
+                {
+                    let hdr = file.deref_mut().get_header_mut();
+
+                    let mut table = match hdr.read("links.external.content")? {
+                        Some(&Value::Table(ref table)) => table.clone(),
+                        Some(_) => {
+                            warn!("There is a value at 'links.external.content' which is not a table.");
+                            warn!("Going to override this value");
+                            BTreeMap::new()
+                        },
+                        None => BTreeMap::new(),
+                    };
+
+                    let v = Value::String(link.into_string());
+
+                    debug!("setting URL = '{:?}", v);
+                    table.insert(String::from("url"), v);
+
+                    let _ = hdr.insert("links.external.content", Value::Table(table))?;
+                    debug!("Setting URL worked");
+                }
+
+                // then add an internal link to the new file or return an error if this fails
+                let _ = self.add_internal_link(file.deref_mut())?;
+                debug!("Error adding internal link");
+            }
+            debug!("Ready iterating");
+            Ok(())
+        }
+
+        /// Add an external link to the implementor object
+        fn add_external_link(&mut self, store: &Store, link: Url) -> Result<()> {
+            // get external links, add this one, save them
+            debug!("Getting links");
+            self.get_external_links(store)
+                .and_then(|links| {
+                    // TODO: Do not ignore errors here
+                    let mut links = links.filter_map(Result::ok).collect::<Vec<_>>();
+                    debug!("Adding link = '{:?}' to links = {:?}", link, links);
+                    links.push(link);
+                    debug!("Setting {} links = {:?}", links.len(), links);
+                    self.set_external_links(store, links)
+                })
+        }
+
+        /// Remove an external link from the implementor object
+        fn remove_external_link(&mut self, store: &Store, link: Url) -> Result<()> {
+            // get external links, remove this one, save them
+            self.get_external_links(store)
+                .and_then(|links| {
+                    debug!("Removing link = '{:?}'", link);
+                    let links = links
+                        .filter_map(Result::ok)
+                        .filter(|l| l.as_str() != link.as_str())
+                        .collect::<Vec<_>>();
+                    self.set_external_links(store, links)
+                })
+        }
+
+    }
 }
 
 #[cfg(test)]
