@@ -27,19 +27,19 @@ macro_rules! extend {
     {
         trait $traitname:ident extending $toextend:ty {
             $(
-                fn $fnname:ident( $($argname:ident : $argtype:ty),* ) -> $rettype:ty $block:block
+                fn $fnname:ident($this:ident, $($argname:ident : $argtype:ty),* ) -> $rettype:ty $block:block
             )+
         }
     } => {
         pub trait $traitname {
             $(
-                fn $fnname( $($argname : $argtype ),* ) -> $rettype ;
+                fn $fnname($this, $($argname : $argtype ),* ) -> $rettype ;
             )*
         }
 
         impl $traitname for $toextend {
             $(
-                fn $fnname( $($argname : $argtype ),* ) -> $rettype { $block }
+                fn $fnname($this, $($argname : $argtype ),* ) -> $rettype { $block }
             )*
         }
     }
