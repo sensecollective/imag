@@ -164,6 +164,7 @@ impl StoreEntry {
     }
 
     fn get_entry(&mut self) -> Result<Entry> {
+        trace!("Getting Entry which is {:?}", self.status);
         if !self.is_borrowed() {
             self.file
                 .get_file_content(self.id.clone())
@@ -491,7 +492,10 @@ impl Store {
 
             debug!("Creating: '{}'", id);
             let mut se = StoreEntry::new(id.clone(), &hsmap.backend())?;
+
+            trace !("Setting {:?} to be borrowed", id);
             se.status  = StoreEntryStatus::Borrowed;
+
             let _      = hsmap.insert(id.clone(), se);
 
             //hsmap.mark_as_borrowed(&id);
@@ -659,8 +663,9 @@ impl Store {
         debug!("Writing Entry");
         se.write_entry(&entry.entry)?;
         if modify_presence {
-            debug!("Modifying presence of {} -> Present", entry.get_location());
+            trace!("Modifying presence of {} -> Present", entry.get_location());
             se.status = StoreEntryStatus::Present;
+            trace!("{} is now {:?}", entry.get_location(), se.status);
         }
 
         Ok(())
