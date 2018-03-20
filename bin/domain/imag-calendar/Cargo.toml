@@ -22,8 +22,11 @@ is-it-maintained-open-issues      = { repository = "matthiasbeyer/imag" }
 maintenance                       = { status     = "actively-developed" }
 
 [dependencies]
-log     = "0.4.0"
-walkdir = "2"
+log            = "0.4.0"
+walkdir        = "2"
+itertools      = "0.7"
+prettytable-rs = "0.6"
+chrono         = "0.4"
 
 libimagerror     = { version = "0.7.0", path = "../../../lib/core/libimagerror" }
 libimagrt        = { version = "0.7.0", path = "../../../lib/core/libimagrt" }
@@ -31,6 +34,7 @@ libimagstore     = { version = "0.7.0", path = "../../../lib/core/libimagstore" 
 libimagcalendar  = { version = "0.7.0", path = "../../../lib/domain/libimagcalendar" }
 libimagentryref  = { version = "0.7.0", path = "../../../lib/entry/libimagentryref" }
 libimagutil      = { version = "0.7.0", path = "../../../lib/etc/libimagutil" }
+libimagtimeui    = { version = "0.7.0", path = "../../../lib/etc/libimagtimeui" }
 
 [dependencies.clap]
 version = ">=2.29"
