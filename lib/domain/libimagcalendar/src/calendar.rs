@@ -104,3 +104,51 @@ impl Calendar for Entry {
 
 }
 
+
+pub struct CalendarBuilder {
+    events:     Vec<FileLockEntry<'a>>,
+    collection: Option<FileLockEntry<'a>>,
+
+}
+
+impl CalendarBuilder {
+
+    pub fn new() -> CalendarBuilder {
+        CalendarBuilder {
+            None,
+        }
+    }
+
+    pub fn in_collection(self, co: FileLockEntry<'a>) -> Self {
+        self.collection = Some(co);
+        self
+    }
+
+    pub fn at_path<P: AsRef<Path>>(self, p: P) -> Self {
+        self.path = Some(p.as_ref().to_pathbuf());
+        self
+    }
+
+    pub fn with_event(self, ev: FileLockEntry<'a>) -> Self {
+        self.events.push(ev);
+        self
+    }
+
+    pub fn build(self, collection: &mut FileLockEntry<'a>, store: &Store)
+        -> Result<FileLockEntry<'a>>
+    {
+        // Check collection is a calendar_collection
+        // Check all events are events
+        // Check filepath does not exists, is writable, etc.
+        //
+        // Build vobject::Icalendar objects
+        // Serialize events into the calendar
+        // Write to disk
+        // Create Calendar object in store
+        // link to collection
+        unimplemented!()
+    }
+
+}
+
+
